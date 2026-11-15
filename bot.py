@@ -1,4 +1,4 @@
-штатimport os
+import os
 import asyncio
 import tempfile
 import yt_dlp
@@ -69,7 +69,6 @@ def add_limit(user_id):
     return True
 
 def get_start_keyboard(user_id):
-    # Формируем текст для кнопки подписки
     if has_active_sub(user_id):
         days_left = get_sub_days_left(user_id)
         sub_text = f"💎 Подписка (осталось {days_left} дн.)"
@@ -169,7 +168,7 @@ async def sub_menu(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="Markdown")
     await callback.answer()
 
-# ========== ОПЛАТА КАРТОЙ (БЕЗ ЛАГОВ) ==========
+# ========== ОПЛАТА КАРТОЙ ==========
 @dp.callback_query(F.data == "pay_card")
 async def pay_card(callback: CallbackQuery):
     text = (
@@ -181,7 +180,6 @@ async def pay_card(callback: CallbackQuery):
         f"6 месяцев — {int(PRICES['6_months']['stars'] * STAR_TO_RUB)} ₽\n"
         f"1 год — {int(PRICES['1_year']['stars'] * STAR_TO_RUB)} ₽"
     )
-    # Вместо лагающей ссылки url, используем копирование текста
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Скопировать юзернейм", copy_text={"text": f"@{ADMIN_USERNAME}"})],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")]
@@ -266,26 +264,32 @@ async def admin_take(message: Message):
         await message.answer(f"✅ Забрал подписку у пользователя {target_id}.")
     else:
         await message.answer(f"У пользователя {target_id} нет подписки.")
-    @dp.message(Command("subs"))
+
+@dp.message(Command("subs"))
 async def admin_subs(message: Message):
     if not is_admin(message.from_user.id):
         return
     
     if not subscriptions:
-        await message.answer("📭 Список подписок пуст.")
+        await message.answer("📭 Список подписок пуст. Ни у кого нет активной подписки.")
         return
     
     text = "📋 **Список активных подписок:**\n\n"
     now = datetime.now()
     
-    # Сортируем по дате окончания
-    sorted_subs = sorted(subscriptions.items(), key=lambda item: item[1]["expires"])
+    # Фильтруем только активные и сортируем по дате окончания
+    active_subs = {uid: data for uid, data in subscriptions.items() if data["expires"] > now}
+    
+    if not active_subs:
+        await message.answer("📭 Список подписок пуст. Ни у кого нет активной подписки.")
+        return
+        
+    sorted_subs = sorted(active_subs.items(), key=lambda item: item[1]["expires"])
     
     for i, (user_id, data) in enumerate(sorted_subs, 1):
         exp = data["expires"]
-        if exp > now:
-            days_left = (exp - now).days
-            text += f"{i}. ID: `{user_id}` — осталось {days_left} дн. (до {exp.strftime('%d.%m.%Y')})\n"
+        days_left = (exp - now).days
+        text += f"{i}. ID: `{user_id}` — осталось {days_left} дн. (до {exp.strftime('%d.%m.%Y')})\n"
     
     await message.answer(text, parse_mode="Markdown")
 
