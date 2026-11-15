@@ -1,29 +1,38 @@
 import os
 import asyncio
-import tempfile
-import yt_dlp
+import base64
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
-    Message, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton,
+    Message, InlineKeyboardMarkup, InlineKeyboardButton,
     CallbackQuery, LabeledPrice, PreCheckoutQuery
 )
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from openai import AsyncOpenAI
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "9260089561:AAHa7zVTRqXN6AQRJ-dN7W67bIbt2BsQZAA"
-ADMIN_ID = 6664994954  # Твой числовой ID из @userinfobot
+ADMIN_ID = 6664994954  # Твой ID
 ADMIN_USERNAME = "BaRaShKa_Be0"  # Без @
-STAR_TO_RUB = 1.7  # Примерный курс 1 звезды в рублях
+OPENROUTER_API_KEY = "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"
 
-# Цены подписок в звёздах
+STAR_TO_RUB = 1.7
 PRICES = {
     "1_month": {"stars": 50, "label": "1 месяц", "days": 30},
     "6_months": {"stars": 300, "label": "6 месяцев", "days": 180},
     "1_year": {"stars": 1000, "label": "1 год", "days": 365},
 }
+
+# Клиент для OpenRouter
+client = AsyncOpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
+
+# Бесплатная модель с поддержкой зрения (картинок)
+MODEL = "google/gemma-3-27b-it:free"
 
 print("=== БОТ ЗАПУСКАЕТСЯ ===")
 
@@ -31,8 +40,8 @@ dp = Dispatcher()
 user_limits = {}
 subscriptions = {}
 
-class DownloadStates(StatesGroup):
-    waiting_for_choice = State()
+class ChatStates(StatesGroup):
+    waiting_for_question = State()
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 def is_admin(user_id):
@@ -76,7 +85,7 @@ def get_start_keyboard(user_id):
         sub_text = "💎 Купить подписку"
         
     kb = [
-        [InlineKeyboardButton(text="📥 Как скачать", callback_data="how_to")],
+        [InlineKeyboardButton(text="📥 Как решать", callback_data="how_to")],
         [InlineKeyboardButton(text=sub_text, callback_data="sub_menu")],
         [InlineKeyboardButton(text="ℹ️ О боте", callback_data="about")],
     ]
@@ -95,20 +104,20 @@ async def start(message: Message):
     
     text = (
         f"Привет! 👋\n\n"
-        f"Я скачиваю видео из TikTok, Instagram и YouTube Shorts.\n\n"
+        f"Я — твой ИИ-решебник. Отправь мне фото или текст задания, и я решу его по шагам.\n\n"
         f"📊 Твой статус: {sub_status}\n"
-        f"Отправь ссылку на видео!"
+        f"Кидай задачу!"
     )
     await message.answer(text, reply_markup=get_start_keyboard(user_id))
 
 @dp.callback_query(F.data == "how_to")
 async def how_to(callback: CallbackQuery):
-    await callback.message.answer("1. Скопируй ссылку на видео.\n2. Отправь её мне.\n3. Выбери: видео или музыка.")
+    await callback.message.answer("1. Сфоткай задание (или напиши текстом).\n2. Отправь мне.\n3. Подожди пару секунд — я пришлю решение.")
     await callback.answer()
 
 @dp.callback_query(F.data == "about")
 async def about(callback: CallbackQuery):
-    await callback.message.answer("Бот-загрузчик. Работает на yt-dlp. Без водяных знаков.")
+    await callback.message.answer("Я бот-решебник на базе ИИ. Решаю задачи по фото и тексту. Без базы ответов — только чистая логика.")
     await callback.answer()
 
 @dp.callback_query(F.data == "back_to_start")
@@ -123,9 +132,9 @@ async def back_to_start(callback: CallbackQuery):
         
     text = (
         f"Привет! 👋\n\n"
-        f"Я скачиваю видео из TikTok, Instagram и YouTube Shorts.\n\n"
+        f"Я — твой ИИ-решебник. Отправь мне фото или текст задания, и я решу его по шагам.\n\n"
         f"📊 Твой статус: {sub_status}\n"
-        f"Отправь ссылку на видео!"
+        f"Кидай задачу!"
     )
     await callback.message.edit_text(text, reply_markup=get_start_keyboard(user_id))
     await callback.answer()
@@ -140,7 +149,7 @@ async def sub_menu(callback: CallbackQuery):
         await callback.message.edit_text(
             f"✅ У тебя активна подписка до {exp}.\n"
             f"Осталось дней: {days_left}\n\n"
-            f"Скачивания без ограничений!",
+            f"Решения без ограничений!",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_start")]
             ])
@@ -160,7 +169,7 @@ async def sub_menu(callback: CallbackQuery):
     
     text = (
         "💎 **Выбери подписку:**\n\n"
-        "Бесплатно: 5 скачиваний в день\n"
+        "Бесплатно: 5 решений в день\n"
         "С подпиской: безлимит\n\n"
         "Оплата звёздами — автоматически.\n"
         "Оплата картой — напиши админу."
@@ -198,7 +207,7 @@ async def buy_stars(callback: CallbackQuery):
     price = PRICES[key]
     await callback.message.answer_invoice(
         title=f"Подписка: {price['label']}",
-        description=f"Безлимитные скачивания на {price['label']}",
+        description=f"Безлимитные решения на {price['label']}",
         payload=f"sub_{key}",
         provider_token="",
         currency="XTR",
@@ -225,7 +234,7 @@ async def successful_payment(message: Message):
             await message.answer(
                 f"✅ **Оплата прошла!**\n\n"
                 f"Подписка активирована до {expires.strftime('%d.%m.%Y')}.\n"
-                f"Теперь ты можешь скачивать без ограничений! 🎉",
+                f"Теперь ты можешь решать без ограничений! 🎉",
                 parse_mode="Markdown"
             )
 
@@ -274,16 +283,14 @@ async def admin_subs(message: Message):
         await message.answer("📭 Список подписок пуст. Ни у кого нет активной подписки.")
         return
     
-    text = "📋 **Список активных подписок:**\n\n"
     now = datetime.now()
-    
-    # Фильтруем только активные и сортируем по дате окончания
     active_subs = {uid: data for uid, data in subscriptions.items() if data["expires"] > now}
     
     if not active_subs:
         await message.answer("📭 Список подписок пуст. Ни у кого нет активной подписки.")
         return
         
+    text = "📋 **Список активных подписок:**\n\n"
     sorted_subs = sorted(active_subs.items(), key=lambda item: item[1]["expires"])
     
     for i, (user_id, data) in enumerate(sorted_subs, 1):
@@ -293,18 +300,19 @@ async def admin_subs(message: Message):
     
     await message.answer(text, parse_mode="Markdown")
 
-# ========== СКАЧИВАНИЕ ==========
-@dp.message(F.text)
-async def receive_link(message: Message, state: FSMContext):
-    url = message.text.strip()
-    if not any(x in url for x in ["tiktok.com", "instagram.com", "youtube.com/shorts"]):
-        await message.answer("Это не похоже на ссылку из TikTok, Instagram или YouTube Shorts.")
+# ========== ЛОГИКА РЕШЕНИЯ ЗАДАЧ ==========
+@dp.message(F.photo | F.text)
+async def handle_question(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    
+    # Пропускаем команды (начинаются с /)
+    if message.text and message.text.startswith('/'):
         return
 
-    if not add_limit(message.from_user.id):
+    if not add_limit(user_id):
         await message.answer(
             "⛔ **Лимит исчерпан!**\n\n"
-            "Бесплатно можно скачать 5 видео в день.\n"
+            "Бесплатно можно решить 5 задач в день.\n"
             "Оформи подписку для безлимита!",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="💎 Купить подписку", callback_data="sub_menu")]
@@ -313,68 +321,48 @@ async def receive_link(message: Message, state: FSMContext):
         )
         return
 
-    await state.update_data(url=url)
-    await state.set_state(DownloadStates.waiting_for_choice)
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎬 Видео", callback_data="dl_video")],
-        [InlineKeyboardButton(text="🎵 Музыка (MP3)", callback_data="dl_audio")]
-    ])
-    await message.answer("Что скачать?", reply_markup=kb)
-
-@dp.callback_query(F.data == "dl_video", DownloadStates.waiting_for_choice)
-async def dl_video(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    url = data.get("url")
-    await state.clear()
-    await callback.message.edit_text("⏳ Качаю видео...")
-    await process_download(callback.message, url, is_audio=False)
-
-@dp.callback_query(F.data == "dl_audio", DownloadStates.waiting_for_choice)
-async def dl_audio(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    url = data.get("url")
-    await state.clear()
-    await callback.message.edit_text("⏳ Извлекаю музыку...")
-    await process_download(callback.message, url, is_audio=True)
-
-async def process_download(message: Message, url: str, is_audio: bool):
-    temp_dir = tempfile.mkdtemp()
-    output_template = os.path.join(temp_dir, "%(id)s.%(ext)s")
-
-    ydl_opts = {'outtmpl': output_template, 'quiet': True, 'no_warnings': True}
-
-    if is_audio:
-        ydl_opts.update({
-            'format': 'bestaudio/best',
-            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
-        })
-    else:
-        ydl_opts.update({'format': 'best'})
-
+    await message.answer("🧠 Думаю над решением, подожди...")
+    
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            if is_audio:
-                filename = os.path.splitext(filename)[0] + ".mp3"
-
-        file_to_send = FSInputFile(filename)
-        if is_audio:
-            await message.answer_audio(audio=file_to_send, caption="🎵 Готово!")
+        if message.photo:
+            # Скачиваем фото в память
+            photo = message.photo[-1]
+            file_info = await message.bot.get_file(photo.file_id)
+            downloaded_file = await message.bot.download_file(file_info.file_path)
+            
+            # Кодируем в base64 для OpenRouter
+            base64_image = base64.b64encode(downloaded_file.read()).decode('utf-8')
+            
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Реши эту задачу по шагам. Если условие непонятно или на фото не видно текст, честно скажи об этом, не выдумывай."},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    ]
+                }
+            ]
         else:
-            await message.answer_video(video=file_to_send, caption="🎬 Готово!")
+            # Текстовая задача
+            messages = [
+                {
+                    "role": "user", 
+                    "content": f"Реши эту задачу по шагам. Если условие непонятно, честно скажи об этом, не выдумывай.\n\nЗадача: {message.text}"
+                }
+            ]
 
-        os.remove(filename)
-        os.rmdir(temp_dir)
+        response = await client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            max_tokens=1500,
+        )
+        
+        answer = response.choices[0].message.content
+        await message.answer(answer)
+
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {str(e)[:200]}")
-        try:
-            for f in os.listdir(temp_dir):
-                os.remove(os.path.join(temp_dir, f))
-            os.rmdir(temp_dir)
-        except:
-            pass
+        print(f"Ошибка ИИ: {e}")
+        await message.answer("❌ Не смог обработать задачу. Попробуй ещё раз или напиши текстом.")
 
 async def main():
     bot = Bot(token=BOT_TOKEN)
