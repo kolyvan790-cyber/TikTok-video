@@ -20,18 +20,16 @@ STAR_TO_RUB = 1.7  # Примерный курс 1 звезды в рублях
 
 # Цены подписок в звёздах
 PRICES = {
-    "1_month": {"stars": 50, "label": "1 месяц"},
-    "6_months": {"stars": 300, "label": "6 месяцев"},
-    "1_year": {"stars": 1000, "label": "1 год"},
+    "1_month": {"stars": 50, "label": "1 месяц", "days": 30},
+    "6_months": {"stars": 300, "label": "6 месяцев", "days": 180},
+    "1_year": {"stars": 1000, "label": "1 год", "days": 365},
 }
 
 print("=== БОТ ЗАПУСКАЕТСЯ ===")
 
 dp = Dispatcher()
-
-# Хранилища (в памяти, сбрасываются при перезапуске)
-user_limits = {}   # {user_id: {"date": date, "count": int}}
-subscriptions = {} # {user_id: {"expires": datetime}}
+user_limits = {}
+subscriptions = {}
 
 class DownloadStates(StatesGroup):
     waiting_for_choice = State()
@@ -45,17 +43,22 @@ def has_active_sub(user_id):
         return False
     return subscriptions[user_id]["expires"] > datetime.now()
 
+def get_sub_days_left(user_id):
+    if not has_active_sub(user_id):
+        return 0
+    delta = subscriptions[user_id]["expires"] - datetime.now()
+    return max(0, delta.days)
+
 def get_limit(user_id):
-    if has_active_sub(user_id):
-        return 999999  # безлимит
-    # Бесплатный лимит: 5 в день
+    if has_active_sub(user_id) or is_admin(user_id):
+        return 999999
     today = datetime.now().date()
     if user_id not in user_limits or user_limits[user_id]["date"] != today:
         user_limits[user_id] = {"date": today, "count": 0}
     return user_limits[user_id]["count"]
 
 def add_limit(user_id):
-    if has_active_sub(user_id):
+    if has_active_sub(user_id) or is_admin(user_id):
         return True
     today = datetime.now().date()
     if user_id not in user_limits or user_limits[user_id]["date"] != today:
@@ -66,11 +69,17 @@ def add_limit(user_id):
     return True
 
 def get_start_keyboard(user_id):
+    # Формируем текст для кнопки подписки
+    if has_active_sub(user_id):
+        days_left = get_sub_days_left(user_id)
+        sub_text = f"💎 Подписка (осталось {days_left} дн.)"
+    else:
+        sub_text = "💎 Купить подписку"
+        
     kb = [
         [InlineKeyboardButton(text="📥 Как скачать", callback_data="how_to")],
-        [InlineKeyboardButton(text="💎 Подписка", callback_data="sub_menu")],
+        [InlineKeyboardButton(text=sub_text, callback_data="sub_menu")],
         [InlineKeyboardButton(text="ℹ️ О боте", callback_data="about")],
-        [InlineKeyboardButton(text="🔗 Поделиться", url=f"https://t.me/{(await_bot_username)}")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -78,7 +87,12 @@ def get_start_keyboard(user_id):
 @dp.message(Command("start"))
 async def start(message: Message):
     user_id = message.from_user.id
-    sub_status = "✅ Активна" if has_active_sub(user_id) else f"❌ Нет (лимит {5 - get_limit(user_id)} из 5)"
+    if is_admin(user_id):
+        sub_status = "👑 Админ (безлимит)"
+    elif has_active_sub(user_id):
+        sub_status = f"✅ Подписка активна (осталось {get_sub_days_left(user_id)} дн.)"
+    else:
+        sub_status = f"❌ Нет (лимит {5 - get_limit(user_id)} из 5)"
     
     text = (
         f"Привет! 👋\n\n"
@@ -98,14 +112,35 @@ async def about(callback: CallbackQuery):
     await callback.message.answer("Бот-загрузчик. Работает на yt-dlp. Без водяных знаков.")
     await callback.answer()
 
+@dp.callback_query(F.data == "back_to_start")
+async def back_to_start(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if is_admin(user_id):
+        sub_status = "👑 Админ (безлимит)"
+    elif has_active_sub(user_id):
+        sub_status = f"✅ Подписка активна (осталось {get_sub_days_left(user_id)} дн.)"
+    else:
+        sub_status = "❌ Нет"
+        
+    text = (
+        f"Привет! 👋\n\n"
+        f"Я скачиваю видео из TikTok, Instagram и YouTube Shorts.\n\n"
+        f"📊 Твой статус: {sub_status}\n"
+        f"Отправь ссылку на видео!"
+    )
+    await callback.message.edit_text(text, reply_markup=get_start_keyboard(user_id))
+    await callback.answer()
+
 # ========== МЕНЮ ПОДПИСКИ ==========
 @dp.callback_query(F.data == "sub_menu")
 async def sub_menu(callback: CallbackQuery):
     user_id = callback.from_user.id
     if has_active_sub(user_id):
         exp = subscriptions[user_id]["expires"].strftime("%d.%m.%Y %H:%M")
+        days_left = get_sub_days_left(user_id)
         await callback.message.edit_text(
-            f"✅ У тебя активна подписка до {exp}.\n\n"
+            f"✅ У тебя активна подписка до {exp}.\n"
+            f"Осталось дней: {days_left}\n\n"
             f"Скачивания без ограничений!",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_start")]
@@ -134,33 +169,21 @@ async def sub_menu(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="Markdown")
     await callback.answer()
 
-@dp.callback_query(F.data == "back_to_start")
-async def back_to_start(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    sub_status = "✅ Активна" if has_active_sub(user_id) else "❌ Нет"
-    text = (
-        f"Привет! 👋\n\n"
-        f"Я скачиваю видео из TikTok, Instagram и YouTube Shorts.\n\n"
-        f"📊 Твой статус: {sub_status}\n"
-        f"Отправь ссылку на видео!"
-    )
-    await callback.message.edit_text(text, reply_markup=get_start_keyboard(user_id))
-    await callback.answer()
-
-# ========== ОПЛАТА КАРТОЙ ==========
+# ========== ОПЛАТА КАРТОЙ (БЕЗ ЛАГОВ) ==========
 @dp.callback_query(F.data == "pay_card")
 async def pay_card(callback: CallbackQuery):
     text = (
         "💳 **Оплата картой**\n\n"
-        f"Напиши мне в личку: @{ADMIN_USERNAME}\n\n"
+        f"Мой юзернейм: `@{ADMIN_USERNAME}`\n\n"
         f"Скажи, какую подписку хочешь, и я скину реквизиты.\n\n"
         f"Цены:\n"
         f"1 месяц — {int(PRICES['1_month']['stars'] * STAR_TO_RUB)} ₽\n"
         f"6 месяцев — {int(PRICES['6_months']['stars'] * STAR_TO_RUB)} ₽\n"
         f"1 год — {int(PRICES['1_year']['stars'] * STAR_TO_RUB)} ₽"
     )
+    # Вместо лагающей ссылки url, используем копирование текста
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Написать админу", url=f"https://t.me/{ADMIN_USERNAME}")],
+        [InlineKeyboardButton(text="📋 Скопировать юзернейм", copy_text={"text": f"@{ADMIN_USERNAME}"})],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")]
     ])
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
@@ -179,15 +202,14 @@ async def buy_stars(callback: CallbackQuery):
         title=f"Подписка: {price['label']}",
         description=f"Безлимитные скачивания на {price['label']}",
         payload=f"sub_{key}",
-        provider_token="",  # Пустая строка для Telegram Stars
-        currency="XTR",      # XTR = Telegram Stars
+        provider_token="",
+        currency="XTR",
         prices=[LabeledPrice(label=price['label'], amount=price['stars'])],
     )
     await callback.answer()
 
 @dp.pre_checkout_query()
 async def pre_checkout(query: PreCheckoutQuery):
-    # Подтверждаем оплату
     await query.answer(ok=True)
 
 @dp.message(F.successful_payment)
@@ -198,17 +220,10 @@ async def successful_payment(message: Message):
     if payload.startswith("sub_"):
         key = payload.replace("sub_", "")
         if key in PRICES:
-            # Выдаём подписку
-            if key == "1_month":
-                expires = datetime.now() + timedelta(days=30)
-            elif key == "6_months":
-                expires = datetime.now() + timedelta(days=180)
-            elif key == "1_year":
-                expires = datetime.now() + timedelta(days=365)
-            else:
-                expires = datetime.now() + timedelta(days=30)
-            
+            days = PRICES[key]["days"]
+            expires = datetime.now() + timedelta(days=days)
             subscriptions[user_id] = {"expires": expires}
+            
             await message.answer(
                 f"✅ **Оплата прошла!**\n\n"
                 f"Подписка активирована до {expires.strftime('%d.%m.%Y')}.\n"
@@ -219,41 +234,33 @@ async def successful_payment(message: Message):
 # ========== АДМИН-КОМАНДЫ ==========
 @dp.message(Command("give"))
 async def admin_give(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    
+    if not is_admin(message.from_user.id): return
     args = message.text.split()
     if len(args) != 3:
-        await message.answer("Использование: /give <user_id> <дни>\nПример: /give 123456789 30")
+        await message.answer("Использование: /give <user_id> <дни>")
         return
-    
     try:
         target_id = int(args[1])
         days = int(args[2])
     except ValueError:
         await message.answer("ID и дни должны быть числами.")
         return
-    
     expires = datetime.now() + timedelta(days=days)
     subscriptions[target_id] = {"expires": expires}
     await message.answer(f"✅ Выдал подписку пользователю {target_id} на {days} дней (до {expires.strftime('%d.%m.%Y')}).")
 
 @dp.message(Command("take"))
 async def admin_take(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    
+    if not is_admin(message.from_user.id): return
     args = message.text.split()
     if len(args) != 2:
-        await message.answer("Использование: /take <user_id>\nПример: /take 123456789")
+        await message.answer("Использование: /take <user_id>")
         return
-    
     try:
         target_id = int(args[1])
     except ValueError:
         await message.answer("ID должен быть числом.")
         return
-    
     if target_id in subscriptions:
         del subscriptions[target_id]
         await message.answer(f"✅ Забрал подписку у пользователя {target_id}.")
@@ -264,7 +271,6 @@ async def admin_take(message: Message):
 @dp.message(F.text)
 async def receive_link(message: Message, state: FSMContext):
     url = message.text.strip()
-    
     if not any(x in url for x in ["tiktok.com", "instagram.com", "youtube.com/shorts"]):
         await message.answer("Это не похоже на ссылку из TikTok, Instagram или YouTube Shorts.")
         return
@@ -345,12 +351,8 @@ async def process_download(message: Message, url: str, is_audio: bool):
             pass
 
 async def main():
-    global await_bot_username
     bot = Bot(token=BOT_TOKEN)
-    me = await bot.get_me()
-    await_bot_username = me.username
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    await_bot_username = ""
     asyncio.run(main())
