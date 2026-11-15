@@ -32,7 +32,7 @@ client = AsyncOpenAI(
 )
 
 # Бесплатная модель с поддержкой зрения (картинок)
-MODEL = "google/gemma-3-27b-it:free"
+MODEL = "google/gemma-4-26b-a4b-it:free"
 
 print("=== БОТ ЗАПУСКАЕТСЯ ===")
 
