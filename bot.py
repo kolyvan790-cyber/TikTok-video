@@ -1,4 +1,4 @@
-import os
+штатimport os
 import asyncio
 import tempfile
 import yt_dlp
@@ -266,6 +266,28 @@ async def admin_take(message: Message):
         await message.answer(f"✅ Забрал подписку у пользователя {target_id}.")
     else:
         await message.answer(f"У пользователя {target_id} нет подписки.")
+    @dp.message(Command("subs"))
+async def admin_subs(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    
+    if not subscriptions:
+        await message.answer("📭 Список подписок пуст.")
+        return
+    
+    text = "📋 **Список активных подписок:**\n\n"
+    now = datetime.now()
+    
+    # Сортируем по дате окончания
+    sorted_subs = sorted(subscriptions.items(), key=lambda item: item[1]["expires"])
+    
+    for i, (user_id, data) in enumerate(sorted_subs, 1):
+        exp = data["expires"]
+        if exp > now:
+            days_left = (exp - now).days
+            text += f"{i}. ID: `{user_id}` — осталось {days_left} дн. (до {exp.strftime('%d.%m.%Y')})\n"
+    
+    await message.answer(text, parse_mode="Markdown")
 
 # ========== СКАЧИВАНИЕ ==========
 @dp.message(F.text)
