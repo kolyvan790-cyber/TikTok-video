@@ -16,7 +16,7 @@ from openai import AsyncOpenAI
 BOT_TOKEN = "9260089561:AAHa7zVTRqXN6AQRJ-dN7W67bIbt2BsQZAA"
 ADMIN_ID = 6664994954  # Твой ID
 ADMIN_USERNAME = "BaRaShKa_Be0"
-OPENROUTER_API_KEY = "sk-or-v1-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"
+OPENROUTER_API_KEY = "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"
 
 # Выбери рабочую модель из списка:
 # "nvidia/nemotron-nano-12b-v2-vl:free"
