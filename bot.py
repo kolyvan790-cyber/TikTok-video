@@ -13,10 +13,16 @@ from aiogram.fsm.state import State, StatesGroup
 from openai import AsyncOpenAI
 
 # ========== НАСТРОЙКИ ==========
-BOT_TOKEN = "9260089561:AAHa7zVTRqXN6AQRJ-dN7W67bIbt2BsQZAA"
+BOT_TOKEN = ""
 ADMIN_ID = 6664994954  # Твой ID
-ADMIN_USERNAME = "BaRaShKa_Be0"  # Без @
-OPENROUTER_API_KEY = "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"
+ADMIN_USERNAME = "BaRaShKa_Be0"
+OPENROUTER_API_KEY = "sk-or-v1-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"
+
+# Выбери рабочую модель из списка:
+# "nvidia/nemotron-nano-12b-v2-vl:free"
+# "google/gemma-3-27b-it:free"
+# "qwen/qwen-2.5-vl-7b-instruct:free"
+MODEL = "nvidia/nemotron-nano-12b-v2-vl:free"
 
 STAR_TO_RUB = 1.7
 PRICES = {
@@ -25,17 +31,9 @@ PRICES = {
     "1_year": {"stars": 1000, "label": "1 год", "days": 365},
 }
 
-# Клиент для OpenRouter
-client = AsyncOpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY,
-)
-
-# Бесплатная модель с поддержкой зрения (картинок)
-MODEL = "google/gemma-4-26b-a4b-it:free"
+client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_API_KEY)
 
 print("=== БОТ ЗАПУСКАЕТСЯ ===")
-
 dp = Dispatcher()
 user_limits = {}
 subscriptions = {}
@@ -43,327 +41,198 @@ subscriptions = {}
 class ChatStates(StatesGroup):
     waiting_for_question = State()
 
-# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-def is_admin(user_id):
-    return user_id == ADMIN_ID
-
+# ========== ВСПОМОГАТЕЛЬНЫЕ ==========
+def is_admin(user_id): return user_id == ADMIN_ID
 def has_active_sub(user_id):
-    if user_id not in subscriptions:
-        return False
-    return subscriptions[user_id]["expires"] > datetime.now()
-
+    return user_id in subscriptions and subscriptions[user_id]["expires"] > datetime.now()
 def get_sub_days_left(user_id):
-    if not has_active_sub(user_id):
-        return 0
-    delta = subscriptions[user_id]["expires"] - datetime.now()
-    return max(0, delta.days)
+    if not has_active_sub(user_id): return 0
+    return max(0, (subscriptions[user_id]["expires"] - datetime.now()).days)
 
 def get_limit(user_id):
-    if has_active_sub(user_id) or is_admin(user_id):
-        return 999999
+    if has_active_sub(user_id) or is_admin(user_id): return 999999
     today = datetime.now().date()
     if user_id not in user_limits or user_limits[user_id]["date"] != today:
         user_limits[user_id] = {"date": today, "count": 0}
     return user_limits[user_id]["count"]
 
 def add_limit(user_id):
-    if has_active_sub(user_id) or is_admin(user_id):
-        return True
+    if has_active_sub(user_id) or is_admin(user_id): return True
     today = datetime.now().date()
     if user_id not in user_limits or user_limits[user_id]["date"] != today:
         user_limits[user_id] = {"date": today, "count": 0}
-    if user_limits[user_id]["count"] >= 5:
-        return False
+    if user_limits[user_id]["count"] >= 5: return False
     user_limits[user_id]["count"] += 1
     return True
 
-def get_start_keyboard(user_id):
+def get_main_menu(user_id):
     if has_active_sub(user_id):
-        days_left = get_sub_days_left(user_id)
-        sub_text = f"💎 Подписка (осталось {days_left} дн.)"
+        sub_text = f"💎 Подписка (осталось {get_sub_days_left(user_id)} дн.)"
     else:
         sub_text = "💎 Купить подписку"
-        
     kb = [
-        [InlineKeyboardButton(text="📥 Как решать", callback_data="how_to")],
+        [InlineKeyboardButton(text="🧠 Решить задачу", callback_data="solve_mode")],
+        [InlineKeyboardButton(text="❓ Помощь", callback_data="help_menu")],
+        [InlineKeyboardButton(text="ℹ️ О боте", callback_data="about_bot")],
         [InlineKeyboardButton(text=sub_text, callback_data="sub_menu")],
-        [InlineKeyboardButton(text="ℹ️ О боте", callback_data="about")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 # ========== КОМАНДЫ ==========
 @dp.message(Command("start"))
-async def start(message: Message):
+async def start(message: Message, state: FSMContext):
+    await state.clear()
     user_id = message.from_user.id
-    if is_admin(user_id):
-        sub_status = "👑 Админ (безлимит)"
-    elif has_active_sub(user_id):
-        sub_status = f"✅ Подписка активна (осталось {get_sub_days_left(user_id)} дн.)"
-    else:
-        sub_status = f"❌ Нет (лимит {5 - get_limit(user_id)} из 5)"
+    if is_admin(user_id): status = "👑 Админ (безлимит)"
+    elif has_active_sub(user_id): status = f"✅ Подписка (осталось {get_sub_days_left(user_id)} дн.)"
+    else: status = f"🆓 Бесплатно (лимит {5 - get_limit(user_id)} из 5)"
     
     text = (
-        f"Привет! 👋\n\n"
-        f"Я — твой ИИ-решебник. Отправь мне фото или текст задания, и я решу его по шагам.\n\n"
-        f"📊 Твой статус: {sub_status}\n"
-        f"Кидай задачу!"
+        f"✨ **Привет, {message.from_user.first_name}!**\n\n"
+        f"Я — твой умный помощник по учёбе. Пришли мне фото задания или напиши текст, и я решу его по шагам.\n\n"
+        f"📊 **Твой статус:** {status}\n"
+        f"👇 Выбери действие:"
     )
-    await message.answer(text, reply_markup=get_start_keyboard(user_id))
+    await message.answer(text, reply_markup=get_main_menu(user_id), parse_mode="Markdown")
 
-@dp.callback_query(F.data == "how_to")
-async def how_to(callback: CallbackQuery):
-    await callback.message.answer("1. Сфоткай задание (или напиши текстом).\n2. Отправь мне.\n3. Подожди пару секунд — я пришлю решение.")
+@dp.message(Command("help"))
+async def cmd_help(message: Message):
+    await message.answer("📖 **Как пользоваться:**\n\n1. Нажми «🧠 Решить задачу»\n2. Отправь фото задания или напиши текст\n3. Получи пошаговое решение\n\n⚠️ **Важно:** я не волшебник. Если фото размытое или задача непонятная, я честно скажу, что не могу решить, а не буду выдумывать.", parse_mode="Markdown")
+
+@dp.message(Command("stats"))
+async def cmd_stats(message: Message):
+    if not is_admin(message.from_user.id): return
+    total_subs = len([s for s in subscriptions.values() if s["expires"] > datetime.now()])
+    await message.answer(f"📊 **Статистика:**\nАктивных подписок: {total_subs}\nВсего в памяти: {len(subscriptions)}", parse_mode="Markdown")
+
+# ========== КНОПКИ МЕНЮ ==========
+@dp.callback_query(F.data == "help_menu")
+async def cb_help(callback: CallbackQuery):
+    await callback.message.answer("📖 **Как пользоваться:**\n\n1. Нажми «🧠 Решить задачу»\n2. Отправь фото задания или напиши текст\n3. Получи пошаговое решение\n\n⚠️ Я не выдумываю ответы. Если не смогу — скажу об этом.", parse_mode="Markdown")
     await callback.answer()
 
-@dp.callback_query(F.data == "about")
-async def about(callback: CallbackQuery):
-    await callback.message.answer("Я бот-решебник на базе ИИ. Решаю задачи по фото и тексту. Без базы ответов — только чистая логика.")
+@dp.callback_query(F.data == "about_bot")
+async def cb_about(callback: CallbackQuery):
+    await callback.message.answer("🤖 **О боте**\n\nЯ — честный ИИ-решебник. Работаю на базе нейросетей. Не ищу ответы в базе (как некоторые), а решаю задачи с нуля.\n\nМоя фишка: если я не уверен — я признаюсь, а не вру.", parse_mode="Markdown")
     await callback.answer()
 
-@dp.callback_query(F.data == "back_to_start")
-async def back_to_start(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    if is_admin(user_id):
-        sub_status = "👑 Админ (безлимит)"
-    elif has_active_sub(user_id):
-        sub_status = f"✅ Подписка активна (осталось {get_sub_days_left(user_id)} дн.)"
-    else:
-        sub_status = "❌ Нет"
-        
-    text = (
-        f"Привет! 👋\n\n"
-        f"Я — твой ИИ-решебник. Отправь мне фото или текст задания, и я решу его по шагам.\n\n"
-        f"📊 Твой статус: {sub_status}\n"
-        f"Кидай задачу!"
-    )
-    await callback.message.edit_text(text, reply_markup=get_start_keyboard(user_id))
+@dp.callback_query(F.data == "solve_mode")
+async def cb_solve_mode(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ChatStates.waiting_for_question)
+    await callback.message.answer("📸 **Жду задачу!**\n\nОтправь фото или напиши текст задания. Я решу его по шагам.", parse_mode="Markdown")
     await callback.answer()
 
-# ========== МЕНЮ ПОДПИСКИ ==========
+# ========== ПОДПИСКА (без изменений) ==========
 @dp.callback_query(F.data == "sub_menu")
 async def sub_menu(callback: CallbackQuery):
     user_id = callback.from_user.id
     if has_active_sub(user_id):
         exp = subscriptions[user_id]["expires"].strftime("%d.%m.%Y %H:%M")
-        days_left = get_sub_days_left(user_id)
-        await callback.message.edit_text(
-            f"✅ У тебя активна подписка до {exp}.\n"
-            f"Осталось дней: {days_left}\n\n"
-            f"Решения без ограничений!",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_start")]
-            ])
-        )
-        await callback.answer()
-        return
-
-    kb = []
-    for key, data in PRICES.items():
-        rub = int(data["stars"] * STAR_TO_RUB)
-        kb.append([InlineKeyboardButton(
-            text=f"⭐ {data['label']} — {data['stars']} звёзд (~{rub} ₽)",
-            callback_data=f"buy_stars_{key}"
-        )])
+        await callback.message.edit_text(f"✅ Подписка до {exp}.\nОсталось дней: {get_sub_days_left(user_id)}", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_start")]]))
+        await callback.answer(); return
+    kb = [[InlineKeyboardButton(text=f"⭐ {d['label']} — {d['stars']} звёзд (~{int(d['stars']*STAR_TO_RUB)} ₽)", callback_data=f"buy_stars_{k}")] for k, d in PRICES.items()]
     kb.append([InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_card")])
     kb.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_start")])
-    
-    text = (
-        "💎 **Выбери подписку:**\n\n"
-        "Бесплатно: 5 решений в день\n"
-        "С подпиской: безлимит\n\n"
-        "Оплата звёздами — автоматически.\n"
-        "Оплата картой — напиши админу."
-    )
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="Markdown")
+    await callback.message.edit_text("💎 **Выбери подписку:**\n\nБесплатно: 5 решений в день\nС подпиской: безлимит", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="Markdown")
     await callback.answer()
 
-# ========== ОПЛАТА КАРТОЙ ==========
 @dp.callback_query(F.data == "pay_card")
 async def pay_card(callback: CallbackQuery):
-    text = (
-        "💳 **Оплата картой**\n\n"
-        f"Мой юзернейм: `@{ADMIN_USERNAME}`\n\n"
-        f"Скажи, какую подписку хочешь, и я скину реквизиты.\n\n"
-        f"Цены:\n"
-        f"1 месяц — {int(PRICES['1_month']['stars'] * STAR_TO_RUB)} ₽\n"
-        f"6 месяцев — {int(PRICES['6_months']['stars'] * STAR_TO_RUB)} ₽\n"
-        f"1 год — {int(PRICES['1_year']['stars'] * STAR_TO_RUB)} ₽"
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Скопировать юзернейм", copy_text={"text": f"@{ADMIN_USERNAME}"})],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")]
-    ])
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(f"💳 **Оплата картой**\n\nМой юзернейм: `@{ADMIN_USERNAME}`\n\nНапиши мне, и я скину реквизиты.\n\nЦены:\n1 месяц — {int(PRICES['1_month']['stars']*STAR_TO_RUB)} ₽\n6 месяцев — {int(PRICES['6_months']['stars']*STAR_TO_RUB)} ₽\n1 год — {int(PRICES['1_year']['stars']*STAR_TO_RUB)} ₽", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📋 Скопировать юзернейм", copy_text={"text": f"@{ADMIN_USERNAME}"})],[InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")]]), parse_mode="Markdown")
+    await callback.answer()
+
+@dp.callback_query(F.data == "back_to_start")
+async def back_to_start(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if is_admin(user_id): status = "👑 Админ"
+    elif has_active_sub(user_id): status = f"✅ Подписка (осталось {get_sub_days_left(user_id)} дн.)"
+    else: status = "🆓 Бесплатно"
+    await callback.message.edit_text(f"✨ **Главное меню**\n\n📊 Статус: {status}\n👇 Выбери действие:", reply_markup=get_main_menu(user_id), parse_mode="Markdown")
     await callback.answer()
 
 # ========== ОПЛАТА ЗВЁЗДАМИ ==========
 @dp.callback_query(F.data.startswith("buy_stars_"))
 async def buy_stars(callback: CallbackQuery):
     key = callback.data.replace("buy_stars_", "")
-    if key not in PRICES:
-        await callback.answer("Ошибка", show_alert=True)
-        return
-    
-    price = PRICES[key]
-    await callback.message.answer_invoice(
-        title=f"Подписка: {price['label']}",
-        description=f"Безлимитные решения на {price['label']}",
-        payload=f"sub_{key}",
-        provider_token="",
-        currency="XTR",
-        prices=[LabeledPrice(label=price['label'], amount=price['stars'])],
-    )
+    if key not in PRICES: return
+    p = PRICES[key]
+    await callback.message.answer_invoice(title=f"Подписка: {p['label']}", description=f"Безлимитные решения на {p['label']}", payload=f"sub_{key}", provider_token="", currency="XTR", prices=[LabeledPrice(label=p['label'], amount=p['stars'])])
     await callback.answer()
 
 @dp.pre_checkout_query()
-async def pre_checkout(query: PreCheckoutQuery):
-    await query.answer(ok=True)
+async def pre_checkout(query: PreCheckoutQuery): await query.answer(ok=True)
 
 @dp.message(F.successful_payment)
 async def successful_payment(message: Message):
     payload = message.successful_payment.invoice_payload
-    user_id = message.from_user.id
-    
     if payload.startswith("sub_"):
         key = payload.replace("sub_", "")
         if key in PRICES:
-            days = PRICES[key]["days"]
-            expires = datetime.now() + timedelta(days=days)
-            subscriptions[user_id] = {"expires": expires}
-            
-            await message.answer(
-                f"✅ **Оплата прошла!**\n\n"
-                f"Подписка активирована до {expires.strftime('%d.%m.%Y')}.\n"
-                f"Теперь ты можешь решать без ограничений! 🎉",
-                parse_mode="Markdown"
-            )
+            expires = datetime.now() + timedelta(days=PRICES[key]["days"])
+            subscriptions[message.from_user.id] = {"expires": expires}
+            await message.answer(f"✅ **Оплата прошла!**\nПодписка до {expires.strftime('%d.%m.%Y')}.", parse_mode="Markdown")
 
-# ========== АДМИН-КОМАНДЫ ==========
+# ========== АДМИНКА ==========
 @dp.message(Command("give"))
 async def admin_give(message: Message):
     if not is_admin(message.from_user.id): return
     args = message.text.split()
-    if len(args) != 3:
-        await message.answer("Использование: /give <user_id> <дни>")
-        return
+    if len(args) != 3: return
     try:
-        target_id = int(args[1])
-        days = int(args[2])
-    except ValueError:
-        await message.answer("ID и дни должны быть числами.")
-        return
-    expires = datetime.now() + timedelta(days=days)
-    subscriptions[target_id] = {"expires": expires}
-    await message.answer(f"✅ Выдал подписку пользователю {target_id} на {days} дней (до {expires.strftime('%d.%m.%Y')}).")
+        target_id, days = int(args[1]), int(args[2])
+        subscriptions[target_id] = {"expires": datetime.now() + timedelta(days=days)}
+        await message.answer(f"✅ Выдал {target_id} на {days} дней.")
+    except: await message.answer("Ошибка. Формат: /give ID ДНИ")
 
 @dp.message(Command("take"))
 async def admin_take(message: Message):
     if not is_admin(message.from_user.id): return
     args = message.text.split()
-    if len(args) != 2:
-        await message.answer("Использование: /take <user_id>")
-        return
+    if len(args) != 2: return
     try:
         target_id = int(args[1])
-    except ValueError:
-        await message.answer("ID должен быть числом.")
-        return
-    if target_id in subscriptions:
-        del subscriptions[target_id]
-        await message.answer(f"✅ Забрал подписку у пользователя {target_id}.")
-    else:
-        await message.answer(f"У пользователя {target_id} нет подписки.")
+        if target_id in subscriptions: del subscriptions[target_id]; await message.answer(f"✅ Забрал у {target_id}.")
+        else: await message.answer("Нет подписки.")
+    except: await message.answer("Ошибка. Формат: /take ID")
 
 @dp.message(Command("subs"))
 async def admin_subs(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    
-    if not subscriptions:
-        await message.answer("📭 Список подписок пуст. Ни у кого нет активной подписки.")
-        return
-    
+    if not is_admin(message.from_user.id): return
     now = datetime.now()
-    active_subs = {uid: data for uid, data in subscriptions.items() if data["expires"] > now}
-    
-    if not active_subs:
-        await message.answer("📭 Список подписок пуст. Ни у кого нет активной подписки.")
-        return
-        
-    text = "📋 **Список активных подписок:**\n\n"
-    sorted_subs = sorted(active_subs.items(), key=lambda item: item[1]["expires"])
-    
-    for i, (user_id, data) in enumerate(sorted_subs, 1):
-        exp = data["expires"]
-        days_left = (exp - now).days
-        text += f"{i}. ID: `{user_id}` — осталось {days_left} дн. (до {exp.strftime('%d.%m.%Y')})\n"
-    
+    active = {uid: d for uid, d in subscriptions.items() if d["expires"] > now}
+    if not active: await message.answer("📭 Список пуст."); return
+    text = "📋 **Активные подписки:**\n\n"
+    for uid, d in sorted(active.items(), key=lambda x: x[1]["expires"]):
+        text += f"`{uid}` — {(d['expires'] - now).days} дн. (до {d['expires'].strftime('%d.%m')})\n"
     await message.answer(text, parse_mode="Markdown")
 
-# ========== ЛОГИКА РЕШЕНИЯ ЗАДАЧ ==========
-@dp.message(F.photo | F.text)
+# ========== РЕШЕНИЕ ЗАДАЧ (ИИ) ==========
+@dp.message(F.photo | F.text, ChatStates.waiting_for_question)
 async def handle_question(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    
-    # Пропускаем команды (начинаются с /)
-    if message.text and message.text.startswith('/'):
-        return
-
     if not add_limit(user_id):
-        await message.answer(
-            "⛔ **Лимит исчерпан!**\n\n"
-            "Бесплатно можно решить 5 задач в день.\n"
-            "Оформи подписку для безлимита!",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="💎 Купить подписку", callback_data="sub_menu")]
-            ]),
-            parse_mode="Markdown"
-        )
+        await message.answer("⛔ **Лимит исчерпан!**\n\nБесплатно: 5 решений в день.\nОформи подписку для безлимита!", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💎 Купить подписку", callback_data="sub_menu")]]), parse_mode="Markdown")
         return
 
-    await message.answer("🧠 Думаю над решением, подожди...")
-    
+    await message.answer("🧠 Думаю над решением...")
     try:
         if message.photo:
-            # Скачиваем фото в память
             photo = message.photo[-1]
-            file_info = await message.bot.get_file(photo.file_id)
-            downloaded_file = await message.bot.download_file(file_info.file_path)
-            
-            # Кодируем в base64 для OpenRouter
-            base64_image = base64.b64encode(downloaded_file.read()).decode('utf-8')
-            
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Реши эту задачу по шагам. Если условие непонятно или на фото не видно текст, честно скажи об этом, не выдумывай."},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                    ]
-                }
-            ]
+            file = await message.bot.download_file((await message.bot.get_file(photo.file_id)).file_path)
+            b64 = base64.b64encode(file.read()).decode('utf-8')
+            messages = [{"role": "user", "content": [{"type": "text", "text": "Реши эту задачу по шагам. Если условие непонятно или на фото не видно текст, честно скажи об этом, не выдумывай."}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}]
         else:
-            # Текстовая задача
-            messages = [
-                {
-                    "role": "user", 
-                    "content": f"Реши эту задачу по шагам. Если условие непонятно, честно скажи об этом, не выдумывай.\n\nЗадача: {message.text}"
-                }
-            ]
-
-        response = await client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            max_tokens=1500,
-        )
+            messages = [{"role": "user", "content": f"Реши эту задачу по шагам. Если условие непонятно, честно скажи об этом, не выдумывай.\n\nЗадача: {message.text}"}]
         
-        answer = response.choices[0].message.content
-        await message.answer(answer)
-
+        response = await client.chat.completions.create(model=MODEL, messages=messages, max_tokens=1500)
+        await message.answer(response.choices[0].message.content)
     except Exception as e:
         print(f"Ошибка ИИ: {e}")
         await message.answer("❌ Не смог обработать задачу. Попробуй ещё раз или напиши текстом.")
+    finally:
+        await state.clear()
 
+# ========== ЗАПУСК ==========
 async def main():
     bot = Bot(token=BOT_TOKEN)
     await dp.start_polling(bot)
