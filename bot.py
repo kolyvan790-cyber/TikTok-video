@@ -22,7 +22,7 @@ OPENROUTER_API_KEY = "sk-or-v1-sk-or-v1-f91749106ac8241f1dd10cc06b64d20cefc9cef7
 # "nvidia/nemotron-nano-12b-v2-vl:free"
 # "google/gemma-3-27b-it:free"
 # "qwen/qwen-2.5-vl-7b-instruct:free"
-MODEL = "nvidia/nemotron-nano-12b-v2-vl:free"
+MODEL = "qwen/qwen-2.5-vl-7b-instruct:free"
 
 STAR_TO_RUB = 1.7
 PRICES = {
